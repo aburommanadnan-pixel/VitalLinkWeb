@@ -1,0 +1,290 @@
+@{
+    ViewData["Title"] = "Emergency Management";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="text-info">
+        <i class="bi bi-graph-up"></i> Emergency Management
+    </h1>
+    <div id="status" class="badge bg-secondary fs-6">Loading...</div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card bg-dark border-danger">
+            <div class="card-body">
+                <div class="text-secondary small">ACTIVE ALERTS</div>
+                <div class="display-5 text-danger" id="kpi-active">0</div>
+                <div class="small text-secondary">Awaiting acknowledgement</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-dark border-warning">
+            <div class="card-body">
+                <div class="text-secondary small">TODAY</div>
+                <div class="display-5 text-warning" id="kpi-today">0</div>
+                <div class="small text-secondary">Total alerts today</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-dark border-info">
+            <div class="card-body">
+                <div class="text-secondary small">LAST 7 DAYS</div>
+                <div class="display-5 text-info" id="kpi-week">0</div>
+                <div class="small text-secondary">Trailing total</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-dark border-success">
+            <div class="card-body">
+                <div class="text-secondary small">AVG ETA</div>
+                <div class="display-5 text-success" id="kpi-eta">— min</div>
+                <div class="small text-secondary">Across active alerts</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-lg-7">
+        <div class="card bg-dark">
+            <div class="card-header bg-dark border-bottom border-secondary">
+                <h5 class="mb-0"><i class="bi bi-list-ul"></i> Recent alerts (live + last 30 days)</h5>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-dark table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Patient</th>
+                            <th>Hospital</th>
+                            <th>G-Force</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recent-alerts-tbody">
+                        <tr><td colspan="5" class="text-center text-secondary py-4">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-5">
+        <div class="card bg-dark">
+            <div class="card-header bg-dark border-bottom border-secondary">
+                <h5 class="mb-0"><i class="bi bi-building"></i> Hospitals on network</h5>
+            </div>
+            <div class="card-body p-0">
+                <table class="table table-dark table-hover mb-0">
+                    <thead>
+                        <tr><th>Name</th><th>Capacity</th><th>Coordinates</th></tr>
+                    </thead>
+                    <tbody id="hospitals-tbody">
+                        <tr><td colspan="3" class="text-center text-secondary py-4">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card bg-dark">
+    <div class="card-header bg-dark border-bottom border-secondary">
+        <h5 class="mb-0"><i class="bi bi-bar-chart"></i> Alerts in the last 24 hours</h5>
+    </div>
+    <div class="card-body">
+        <canvas id="hourlyChart" height="80"></canvas>
+    </div>
+</div>
+
+
+@section Scripts {
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+    VitalLinkAuth.requireAuth(["management", "admin"]).then(() => {
+        setStatus("Connected", "success");
+        startListeners();
+        // Reload the recent-history portion every 60s so the dashboard stays fresh
+        // (active_alerts is live via the listener; history doesn't change in real time).
+        setInterval(reloadHistory, 60000);
+    });
+
+    let chart;
+    let activeAlerts = {};      // live, from /active_alerts
+    let recentHistory = [];     // last ~30 days from /alert_history
+
+    function setStatus(text, color) {
+        const el = document.getElementById("status");
+        el.textContent = text;
+        el.className = "badge bg-" + color + " fs-6";
+    }
+
+    async function startListeners() {
+        // 1. Real-time listener on active_alerts.
+        VitalLinkAuth.db.ref(VitalLinkSchema.Paths.activeAlerts())
+            .on("value", snap => {
+                activeAlerts = snap.val() || {};
+                refreshAll();
+            });
+
+        // 2. Hospitals — read live too.
+        VitalLinkAuth.db.ref(VitalLinkSchema.Paths.hospitals())
+            .on("value", snap => updateHospitalsTable(snap.val() || {}));
+
+        // 3. Initial history load.
+        await reloadHistory();
+    }
+
+    async function reloadHistory() {
+        // Load last 2 months — covers the 7-day KPI and "today" easily.
+        const from = new Date();
+        from.setMonth(from.getMonth() - 1);
+        from.setDate(1);
+        recentHistory = await VitalLinkSchema.loadHistoryRange(from, new Date());
+        refreshAll();
+    }
+
+    function refreshAll() {
+        updateKpis();
+        updateRecentAlertsTable();
+        updateHourlyChart();
+    }
+
+    function updateKpis() {
+        const activeList = Object.values(activeAlerts);
+        const all = [...activeList, ...recentHistory];
+
+        const now = Date.now() / 1000;
+        const weekAgo = now - 86400 * 7;
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
+        const todayUnix = startOfToday.getTime() / 1000;
+
+        const active = activeList.length;
+        const today  = all.filter(a => (a.created_at || 0) >= todayUnix).length;
+        const week   = all.filter(a => (a.created_at || 0) >= weekAgo).length;
+
+        const activeEtas = activeList
+            .filter(a => a.hospital_snapshot?.eta_seconds)
+            .map(a => a.hospital_snapshot.eta_seconds);
+        const avgEta = activeEtas.length
+            ? Math.round(activeEtas.reduce((s, x) => s + x, 0) / activeEtas.length / 60)
+            : "—";
+
+        document.getElementById("kpi-active").textContent = active;
+        document.getElementById("kpi-today").textContent = today;
+        document.getElementById("kpi-week").textContent = week;
+        document.getElementById("kpi-eta").textContent =
+            (avgEta === "—" ? "—" : avgEta + " min");
+    }
+
+    function updateRecentAlertsTable() {
+        const tbody = document.getElementById("recent-alerts-tbody");
+        const merged = [
+            ...Object.entries(activeAlerts).map(([id, a]) => ({ id, ...a, status: a.status || "active" })),
+            ...recentHistory
+        ];
+        const list = merged
+            .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
+            .slice(0, 10);
+
+        if (list.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center text-secondary py-4">No alerts yet.</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = list.map(a => {
+            const time = new Date((a.created_at || 0) * 1000).toLocaleString();
+            const badge = a.status === "active"
+                ? '<span class="badge bg-danger">Active</span>'
+                : '<span class="badge bg-success">Acknowledged</span>';
+            const ps = a.patient_snapshot || {}, hs = a.hospital_snapshot || {}, ac = a.accident || {};
+            return `<tr>
+                <td>${time}</td>
+                <td>${escapeHtml(ps.name || "—")}</td>
+                <td>${escapeHtml(hs.name || "—")}</td>
+                <td>${(ac.g_force || 0).toFixed(1)}g</td>
+                <td>${badge}</td>
+            </tr>`;
+        }).join("");
+    }
+
+    function updateHospitalsTable(hospitals) {
+        const tbody = document.getElementById("hospitals-tbody");
+        const list = Object.values(hospitals);
+        if (list.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="3" class="text-center text-secondary py-4">No hospitals registered.</td></tr>`;
+            return;
+        }
+        tbody.innerHTML = list.map(h => `<tr>
+            <td>${escapeHtml(h.name || "—")}</td>
+            <td>
+                <div class="progress bg-secondary" style="height: 18px;">
+                    <div class="progress-bar bg-info"
+                         style="width: ${Math.round((h.capacity_score || 0) * 100)}%">
+                        ${Math.round((h.capacity_score || 0) * 100)}%
+                    </div>
+                </div>
+            </td>
+            <td><small class="text-secondary">
+                ${(h.lat || 0).toFixed(4)}, ${(h.lng || 0).toFixed(4)}
+            </small></td>
+        </tr>`).join("");
+    }
+
+    function updateHourlyChart() {
+        const buckets = new Array(24).fill(0);
+        const labels = [];
+        const now = new Date();
+        for (let i = 23; i >= 0; i--) {
+            const h = new Date(now.getTime() - i * 3600 * 1000);
+            labels.push(h.getHours().toString().padStart(2, "0") + ":00");
+        }
+        const cutoff = now.getTime() / 1000 - 24 * 3600;
+        const all = [...Object.values(activeAlerts), ...recentHistory];
+        all.forEach(a => {
+            const ts = a.created_at || 0;
+            if (ts >= cutoff) {
+                const hoursAgo = Math.floor((now.getTime() / 1000 - ts) / 3600);
+                const idx = 23 - hoursAgo;
+                if (idx >= 0 && idx < 24) buckets[idx]++;
+            }
+        });
+
+        const ctx = document.getElementById("hourlyChart").getContext("2d");
+        if (chart) {
+            chart.data.labels = labels;
+            chart.data.datasets[0].data = buckets;
+            chart.update();
+        } else {
+            chart = new Chart(ctx, {
+                type: "bar",
+                data: {
+                    labels: labels,
+                    datasets: [{ label: "Alerts", data: buckets,
+                                 backgroundColor: "rgba(79, 195, 247, 0.8)" }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { stepSize: 1, color: "#aaa" },
+                             grid: { color: "#2a3a4a" } },
+                        x: { ticks: { color: "#aaa" }, grid: { color: "#2a3a4a" } }
+                    }
+                }
+            });
+        }
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({
+            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        }[c]));
+    }
+</script>
+}

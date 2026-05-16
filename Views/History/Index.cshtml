@@ -1,0 +1,332 @@
+@{
+    ViewData["Title"] = "Alert History";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="text-info">
+        <i class="bi bi-clock-history"></i> Alert History
+    </h1>
+    <button id="export-btn" class="btn btn-outline-info" disabled>
+        <i class="bi bi-download"></i> Export CSV
+    </button>
+</div>
+
+<div class="alert alert-secondary border-info small mb-3">
+    <i class="bi bi-info-circle"></i>
+    History loads <strong>one month at a time</strong> from the partitioned archive.
+    Adjust the date range to load more or fewer months.
+</div>
+
+@* ── Filter row ───────────────────────────────────────────────────── *@
+<div class="card bg-dark mb-3">
+    <div class="card-body">
+        <div class="row g-2">
+            <div class="col-md-3">
+                <label class="form-label small text-secondary">From date</label>
+                <input type="date" id="filter-from" class="form-control">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small text-secondary">To date</label>
+                <input type="date" id="filter-to" class="form-control">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small text-secondary">Status</label>
+                <select id="filter-status" class="form-select">
+                    <option value="">All</option>
+                    <option value="active">Active</option>
+                    <option value="acknowledged">Acknowledged</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small text-secondary">Search (patient or hospital)</label>
+                <input type="text" id="filter-search" class="form-control" placeholder="e.g. Ahmed">
+            </div>
+            <div class="col-md-1 d-flex align-items-end">
+                <button id="reload-btn" class="btn btn-info w-100" title="Reload from Firebase">
+                    <i class="bi bi-arrow-clockwise"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="mb-2 text-secondary small">
+    Showing <span id="count-shown">0</span> of <span id="count-total">0</span> alerts
+    <span id="months-loaded" class="ms-2"></span>
+</div>
+
+<div class="card bg-dark">
+    <div class="card-body p-0">
+        <table class="table table-dark table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Patient</th>
+                    <th>Blood Type</th>
+                    <th>Hospital</th>
+                    <th>G-Force</th>
+                    <th>Airbag</th>
+                    <th>Status</th>
+                    <th>Acknowledged by</th>
+                </tr>
+            </thead>
+            <tbody id="history-tbody">
+                <tr>
+                    <td colspan="8" class="text-center text-secondary py-4">Loading...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    <div class="card-footer bg-dark border-top border-secondary">
+        <nav id="pagination" class="d-flex justify-content-center"></nav>
+    </div>
+</div>
+
+
+@section Scripts {
+<script>
+    VitalLinkAuth.requireAuth().then(() => init());
+
+    let allAlerts = [];     // alerts loaded from /alert_history + /active_alerts
+    let filtered = [];
+    let userCache = {};     // uid → email (for "Acknowledged by" column)
+    const PAGE_SIZE = 25;
+    let currentPage = 1;
+
+    async function init() {
+        // Default to "last 3 months" so we don't blast all history on page load.
+        const today = new Date();
+        const fromDefault = new Date(today.getFullYear(), today.getMonth() - 2, 1);
+        document.getElementById("filter-from").value = toDateInput(fromDefault);
+        document.getElementById("filter-to").value = toDateInput(today);
+
+        ["filter-status", "filter-search"].forEach(id => {
+            document.getElementById(id).addEventListener("input", () => {
+                currentPage = 1;
+                applyFilters();
+            });
+        });
+
+        // Date inputs trigger a RELOAD from Firebase, not just a re-filter,
+        // because they decide which months we pull.
+        ["filter-from", "filter-to"].forEach(id => {
+            document.getElementById(id).addEventListener("change", reload);
+        });
+        document.getElementById("reload-btn").addEventListener("click", reload);
+        document.getElementById("export-btn").addEventListener("click", exportCsv);
+
+        await reload();
+    }
+
+    function toDateInput(d) {
+        return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+    }
+    function pad2(n) { return String(n).padStart(2, "0"); }
+
+    async function reload() {
+        const tbody = document.getElementById("history-tbody");
+        tbody.innerHTML = `<tr><td colspan="8" class="text-center text-secondary py-4">
+            <span class="spinner-border spinner-border-sm me-2"></span>
+            Loading from Firebase...</td></tr>`;
+
+        const fromDate = parseDate(document.getElementById("filter-from").value);
+        const toDate = parseDate(document.getElementById("filter-to").value);
+
+        try {
+            const historyAlerts = await VitalLinkSchema.loadHistoryRange(fromDate, toDate);
+
+            // Also fold in current active alerts (so the "Status: All" view is complete).
+            const activeSnap = await VitalLinkAuth.db.ref(
+                VitalLinkSchema.Paths.activeAlerts()
+            ).once("value");
+            const activeObj = activeSnap.val() || {};
+            const activeList = Object.entries(activeObj)
+                .map(([id, a]) => ({ id, ...a, status: a.status || "active" }));
+
+            allAlerts = [...activeList, ...historyAlerts];
+
+            // Pre-fetch acknowledger emails so the table can show them.
+            const uids = [...new Set(
+                allAlerts.map(a => a.acknowledged_by).filter(Boolean)
+            )];
+            await Promise.all(uids.map(loadUserEmail));
+
+            // Show how many months we actually loaded.
+            const monthsCount = countMonths(fromDate, toDate);
+            document.getElementById("months-loaded").textContent =
+                `(loaded ${monthsCount} month${monthsCount === 1 ? "" : "s"} of archive)`;
+
+            applyFilters();
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger py-4">
+                Failed to load: ${escapeHtml(err.message)}</td></tr>`;
+        }
+    }
+
+    function countMonths(from, to) {
+        if (!from) from = new Date(); if (!to) to = new Date();
+        return (to.getFullYear() - from.getFullYear()) * 12
+             + (to.getMonth() - from.getMonth()) + 1;
+    }
+
+    function parseDate(str) {
+        if (!str) return null;
+        return new Date(str + "T00:00:00");
+    }
+
+    async function loadUserEmail(uid) {
+        if (userCache[uid]) return;
+        try {
+            const snap = await VitalLinkAuth.db.ref("/users/" + uid).once("value");
+            userCache[uid] = snap.val()?.email || snap.val()?.display_name || uid.slice(0, 8);
+        } catch {
+            userCache[uid] = uid.slice(0, 8);
+        }
+    }
+
+    function applyFilters() {
+        const fromStr = document.getElementById("filter-from").value;
+        const toStr = document.getElementById("filter-to").value;
+        const status = document.getElementById("filter-status").value;
+        const search = document.getElementById("filter-search").value.toLowerCase().trim();
+
+        const fromTs = fromStr ? new Date(fromStr).getTime() / 1000 : 0;
+        const toTs = toStr ? new Date(toStr).getTime() / 1000 + 86400 : Infinity;
+
+        filtered = allAlerts.filter(a => {
+            const ts = a.created_at || 0;
+            if (ts < fromTs || ts > toTs) return false;
+            if (status && a.status !== status) return false;
+            if (search) {
+                const name = a.patient_snapshot?.name || "";
+                const hospital = a.hospital_snapshot?.name || "";
+                if (!(name + " " + hospital).toLowerCase().includes(search)) return false;
+            }
+            return true;
+        });
+
+        filtered.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+        render();
+    }
+
+    function render() {
+        document.getElementById("count-total").textContent = allAlerts.length;
+        document.getElementById("count-shown").textContent = filtered.length;
+
+        const tbody = document.getElementById("history-tbody");
+        if (filtered.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="8" class="text-center text-secondary py-4">
+                No alerts match the current filters.</td></tr>`;
+            document.getElementById("pagination").innerHTML = "";
+            document.getElementById("export-btn").disabled = true;
+            return;
+        }
+        document.getElementById("export-btn").disabled = false;
+
+        const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
+        if (currentPage > totalPages) currentPage = totalPages;
+        const start = (currentPage - 1) * PAGE_SIZE;
+        const pageItems = filtered.slice(start, start + PAGE_SIZE);
+
+        tbody.innerHTML = pageItems.map(a => {
+            const time = new Date((a.created_at || 0) * 1000).toLocaleString();
+            const ps = a.patient_snapshot || {};
+            const hs = a.hospital_snapshot || {};
+            const ac = a.accident || {};
+            const status = a.status === "active"
+                ? '<span class="badge bg-danger">Active</span>'
+                : '<span class="badge bg-success">Acknowledged</span>';
+            const airbag = ac.airbag
+                ? '<span class="text-warning">Yes</span>'
+                : '<span class="text-secondary">No</span>';
+            const ack = a.acknowledged_by ? userCache[a.acknowledged_by] || "—" : "—";
+            return `<tr>
+                <td>${time}</td>
+                <td>${escapeHtml(ps.name || "—")}</td>
+                <td>${escapeHtml(ps.blood_type || "—")}</td>
+                <td>${escapeHtml(hs.name || "—")}</td>
+                <td>${(ac.g_force || 0).toFixed(1)}g</td>
+                <td>${airbag}</td>
+                <td>${status}</td>
+                <td><small class="text-secondary">${escapeHtml(ack)}</small></td>
+            </tr>`;
+        }).join("");
+
+        renderPagination(totalPages);
+    }
+
+    function renderPagination(totalPages) {
+        if (totalPages <= 1) {
+            document.getElementById("pagination").innerHTML = "";
+            return;
+        }
+        let html = '<ul class="pagination mb-0">';
+        const make = (label, page, disabled, active) =>
+            `<li class="page-item${disabled ? " disabled" : ""}${active ? " active" : ""}">
+                <a class="page-link" href="#" data-page="${page}">${label}</a></li>`;
+        html += make("«", currentPage - 1, currentPage === 1, false);
+        for (let p = 1; p <= totalPages; p++) {
+            if (p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1) {
+                html += make(p, p, false, p === currentPage);
+            } else if (p === 2 || p === totalPages - 1) {
+                html += '<li class="page-item disabled"><span class="page-link">…</span></li>';
+            }
+        }
+        html += make("»", currentPage + 1, currentPage === totalPages, false);
+        html += '</ul>';
+        document.getElementById("pagination").innerHTML = html;
+
+        document.querySelectorAll(".page-link[data-page]").forEach(a => {
+            a.addEventListener("click", e => {
+                e.preventDefault();
+                const p = parseInt(e.target.dataset.page, 10);
+                if (p >= 1 && p <= totalPages) { currentPage = p; render(); }
+            });
+        });
+    }
+
+    function exportCsv() {
+        const headers = ["Time", "Patient", "Blood Type", "Allergies", "Conditions",
+                         "Hospital", "Lat", "Lng", "G-Force", "Airbag", "Status",
+                         "Acknowledged by", "Acknowledged at"];
+        const rows = filtered.map(a => {
+            const ps = a.patient_snapshot || {}, hs = a.hospital_snapshot || {}, ac = a.accident || {};
+            return [
+                new Date((a.created_at || 0) * 1000).toISOString(),
+                ps.name || "",
+                ps.blood_type || "",
+                (ps.allergies || []).join("; "),
+                (ps.conditions || []).join("; "),
+                hs.name || "",
+                ac.lat || "",
+                ac.lng || "",
+                ac.g_force || "",
+                ac.airbag ? "Yes" : "No",
+                a.status || "",
+                a.acknowledged_by ? userCache[a.acknowledged_by] || "" : "",
+                a.acknowledged_at ? new Date(a.acknowledged_at * 1000).toISOString() : ""
+            ];
+        });
+        const csv = [headers, ...rows]
+            .map(r => r.map(field => {
+                const s = String(field);
+                return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+            }).join(","))
+            .join("\n");
+
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "vitallink-history-" + new Date().toISOString().slice(0, 10) + ".csv";
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({
+            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        }[c]));
+    }
+</script>
+}

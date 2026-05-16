@@ -1,0 +1,66 @@
+{
+  "_comment": "Paste this into Firebase Console → Realtime Database → Rules tab → Publish.",
+
+  "rules": {
+
+    "active_alerts": {
+      "_doc": "Live alerts awaiting acknowledgement. Stays small. Anyone signed in can read; ER+management+admin can write.",
+      ".read":  "auth != null",
+      ".write": "auth != null"
+    },
+
+    "alert_history": {
+      "_doc": "The archive, partitioned by /YYYY/MM/{alertId}. All signed-in users can read; writes happen via the acknowledge flow.",
+      ".read":  "auth != null",
+      ".write": "auth != null"
+    },
+
+    "patients": {
+      "_doc": "Canonical patient records. All signed-in staff read. Only management/admin edit.",
+      ".read": "auth != null",
+      "$pid": {
+        ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'admin' || root.child('users').child(auth.uid).child('role').val() === 'management')"
+      }
+    },
+
+    "hospitals": {
+      "_doc": "Signed-in users read. Only management/admin edit.",
+      ".read":  "auth != null",
+      ".write": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'admin' || root.child('users').child(auth.uid).child('role').val() === 'management')"
+    },
+
+    "users": {
+      "_doc": "Each user reads their own role. Only admin writes any user. Once you've created an admin, lock writes here.",
+      "$uid": {
+        ".read":  "auth != null && (auth.uid === $uid || root.child('users').child(auth.uid).child('role').val() === 'admin')",
+        ".write": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'"
+      }
+    },
+
+    "audit_log": {
+      "_doc": "Append-only. Anyone signed in can write a new entry. Only admin can read all entries (regular users see nothing).",
+      ".read":  "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'",
+      ".write": "auth != null"
+    },
+
+    "notifications": {
+      "_doc": "Per-user inbox. Each user reads/writes only their own.",
+      "$uid": {
+        ".read":  "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+
+    "abort_flags": {
+      "_doc": "Driver mobile app cancellation flags (Phase 7).",
+      ".read":  "auth != null",
+      ".write": "auth != null"
+    },
+
+    "alerts": {
+      "_doc": "Legacy path from the old schema. Read-only — for the migration tool.",
+      ".read":  "auth != null",
+      ".write": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'admin'"
+    }
+  }
+}

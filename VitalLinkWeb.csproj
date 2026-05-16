@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    Sdk="Microsoft.NET.Sdk.Web" = this is a web project (not a desktop app).
+    Visual Studio uses this to set up the right templates, build steps, and run profile.
+
+    TargetFramework "net8.0" = uses .NET 8 (Long-Term Support release).
+    ASP.NET Core comes built-in with .NET 8 — no separate install needed.
+
+    Nullable / ImplicitUsings = same beginner-friendly toggles as before.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>VitalLinkWeb</RootNamespace>
+    <AssemblyName>VitalLinkWeb</AssemblyName>
+  </PropertyGroup>
+
+  <!--
+    No NuGet packages needed! ASP.NET Core MVC is part of .NET 8 itself.
+    All Firebase work happens in the browser using Firebase's JavaScript SDK,
+    so we don't need any C# Firebase packages here.
+  -->
+
+</Project>

@@ -1,0 +1,323 @@
+@{
+    ViewData["Title"] = "Disaster Alert";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="text-danger">
+        <i class="bi bi-exclamation-triangle-fill"></i> Disaster Alert
+    </h1>
+    <div id="status-badge" class="badge bg-secondary fs-6">جاهز</div>
+</div>
+
+<p class="text-secondary mb-4">
+    اضغط على الخريطة لتحديد مركز الكارثة، اختر النطاق ونوع الحدث، ثم اضغط <strong>إرسال التنبيه</strong>.
+    كل جهاز موبايل داخل النطاق سيستقبل إشعاراً فورياً.
+</p>
+
+<div class="row g-3">
+    <!-- الخريطة -->
+    <div class="col-lg-8">
+        <div class="card bg-dark border-secondary">
+            <div class="card-header bg-dark border-bottom border-secondary d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-map"></i> حدد موقع الكارثة</h5>
+                <small class="text-secondary" id="coords-display">لم يتم التحديد بعد</small>
+            </div>
+            <div class="card-body p-0">
+                <div id="map" style="height: 450px; width: 100%;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- لوحة التحكم -->
+    <div class="col-lg-4">
+        <div class="card bg-dark border-secondary h-100">
+            <div class="card-header bg-dark border-bottom border-secondary">
+                <h5 class="mb-0"><i class="bi bi-sliders"></i> تفاصيل التنبيه</h5>
+            </div>
+            <div class="card-body d-flex flex-column gap-3">
+
+                <!-- نوع الكارثة -->
+                <div>
+                    <label class="form-label text-secondary small">نوع الحدث</label>
+                    <select id="disaster-type" class="form-select bg-dark text-white border-secondary">
+                        <option value="general">⚠️ عام</option>
+                        <option value="missile">🚀 صواريخ / غارات جوية</option>
+                        <option value="earthquake">🌍 زلزال</option>
+                        <option value="fire">🔥 حريق</option>
+                        <option value="flood">🌊 فيضان</option>
+                        <option value="hazmat">☢️ مواد خطرة</option>
+                        <option value="evacuation">🏃 إخلاء عاجل</option>
+                    </select>
+                </div>
+
+                <!-- النطاق -->
+                <div>
+                    <label class="form-label text-secondary small">
+                        نطاق التأثير: <span id="radius-val" class="text-warning fw-bold">5</span> كم
+                    </label>
+                    <input type="range" class="form-range" id="radius-slider"
+                           min="1" max="50" value="5"
+                           oninput="updateRadius(this.value)">
+                    <div class="d-flex justify-content-between small text-secondary">
+                        <span>1 كم</span>
+                        <span>50 كم</span>
+                    </div>
+                </div>
+
+                <!-- رسالة مخصصة -->
+                <div>
+                    <label class="form-label text-secondary small">رسالة إضافية (اختياري)</label>
+                    <textarea id="custom-message" class="form-control bg-dark text-white border-secondary"
+                              rows="3" placeholder="مثال: ابتعد عن المنطقة فوراً..."></textarea>
+                </div>
+
+                <!-- الموقع المحدد -->
+                <div class="bg-dark border border-secondary rounded p-2">
+                    <div class="small text-secondary mb-1">الموقع المحدد:</div>
+                    <div id="selected-location" class="text-warning small">
+                        اضغط على الخريطة لتحديد موقع
+                    </div>
+                </div>
+
+                <!-- زر الإرسال -->
+                <button id="send-btn" class="btn btn-danger btn-lg mt-auto" onclick="sendDisasterAlert()" disabled>
+                    <i class="bi bi-send-fill"></i> إرسال التنبيه
+                </button>
+
+                <!-- زر إلغاء التنبيه -->
+                <button id="cancel-btn" class="btn btn-outline-secondary" onclick="cancelAlert()" style="display:none;">
+                    <i class="bi bi-x-circle"></i> إلغاء التنبيه الحالي
+                </button>
+
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- سجل التنبيهات المرسلة -->
+<div class="card bg-dark border-secondary mt-4">
+    <div class="card-header bg-dark border-bottom border-secondary">
+        <h5 class="mb-0"><i class="bi bi-clock-history"></i> التنبيهات المرسلة</h5>
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-dark table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>الوقت</th>
+                    <th>النوع</th>
+                    <th>الموقع</th>
+                    <th>النطاق</th>
+                    <th>الحالة</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="alerts-log">
+                <tr><td colspan="6" class="text-center text-secondary py-3">لا توجد تنبيهات مرسلة</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@section Scripts {
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+    // ── Auth check ──────────────────────────────────────────────────────────
+    VitalLinkAuth.requireAuth(["management", "admin"]).then(() => {
+        initMap();
+        loadActiveAlerts();
+    });
+
+    // ── Map setup ───────────────────────────────────────────────────────────
+    let map, marker, circle;
+    let selectedLat = null, selectedLng = null;
+    let currentRadius = 5;
+
+    const disasterLabels = {
+        general:    "⚠️ عام",
+        missile:    "🚀 صواريخ / غارات جوية",
+        earthquake: "🌍 زلزال",
+        fire:       "🔥 حريق",
+        flood:      "🌊 فيضان",
+        hazmat:     "☢️ مواد خطرة",
+        evacuation: "🏃 إخلاء عاجل",
+    };
+
+    function initMap() {
+        map = L.map('map').setView([31.95, 35.93], 9);  // الأردن
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        map.on('click', function(e) {
+            selectedLat = e.latlng.lat;
+            selectedLng = e.latlng.lng;
+            placeMarker(selectedLat, selectedLng);
+            updateCoordsDisplay();
+            document.getElementById('send-btn').disabled = false;
+        });
+    }
+
+    function placeMarker(lat, lng) {
+        if (marker) map.removeLayer(marker);
+        if (circle) map.removeLayer(circle);
+
+        marker = L.marker([lat, lng], {
+            icon: L.divIcon({
+                html: '<div style="font-size:28px">📍</div>',
+                iconSize: [30, 30],
+                iconAnchor: [15, 30],
+                className: ''
+            })
+        }).addTo(map);
+
+        circle = L.circle([lat, lng], {
+            radius: currentRadius * 1000,
+            color: '#dc3545',
+            fillColor: '#dc3545',
+            fillOpacity: 0.15,
+            weight: 2,
+            dashArray: '6 4'
+        }).addTo(map);
+    }
+
+    function updateRadius(val) {
+        currentRadius = parseInt(val);
+        document.getElementById('radius-val').textContent = val;
+        if (circle && selectedLat) {
+            circle.setRadius(currentRadius * 1000);
+        }
+    }
+
+    function updateCoordsDisplay() {
+        const lat = selectedLat.toFixed(4);
+        const lng = selectedLng.toFixed(4);
+        document.getElementById('coords-display').textContent = `${lat}, ${lng}`;
+        document.getElementById('selected-location').innerHTML =
+            `<i class="bi bi-geo-alt-fill text-danger"></i> ${lat}, ${lng}`;
+    }
+
+    // ── Send alert ──────────────────────────────────────────────────────────
+    async function sendDisasterAlert() {
+        if (!selectedLat || !selectedLng) return;
+
+        const type     = document.getElementById('disaster-type').value;
+        const message  = document.getElementById('custom-message').value.trim();
+        const now      = Math.floor(Date.now() / 1000);
+        const user     = VitalLinkAuth.getCurrentUser();
+
+        const alertData = {
+            type:       type,
+            label:      disasterLabels[type],
+            lat:        selectedLat,
+            lng:        selectedLng,
+            radius_km:  currentRadius,
+            message:    message || disasterLabels[type],
+            status:     "active",
+            created_at: now,
+            created_by: user?.email || "admin",
+        };
+
+        setStatus("جاري الإرسال...", "warning");
+        document.getElementById('send-btn').disabled = true;
+
+        try {
+            const db = VitalLinkAuth.db;
+            const newRef = db.ref('/disaster_alerts').push();
+            await newRef.set(alertData);
+
+            setStatus("✅ تم إرسال التنبيه", "success");
+            document.getElementById('cancel-btn').style.display = 'block';
+
+            // حفظ ID للإلغاء لاحقاً
+            document.getElementById('cancel-btn').dataset.alertId = newRef.key;
+
+            // أضف للسجل
+            addToLog(newRef.key, alertData);
+
+        } catch (e) {
+            setStatus("❌ فشل الإرسال: " + e.message, "danger");
+            document.getElementById('send-btn').disabled = false;
+        }
+    }
+
+    // ── Cancel alert ────────────────────────────────────────────────────────
+    async function cancelAlert() {
+        const alertId = document.getElementById('cancel-btn').dataset.alertId;
+        if (!alertId) return;
+
+        try {
+            const db = VitalLinkAuth.db;
+            await db.ref(`/disaster_alerts/${alertId}/status`).set("cancelled");
+            setStatus("تم إلغاء التنبيه", "secondary");
+            document.getElementById('cancel-btn').style.display = 'none';
+            document.getElementById('send-btn').disabled = false;
+            loadActiveAlerts();
+        } catch (e) {
+            setStatus("فشل الإلغاء: " + e.message, "danger");
+        }
+    }
+
+    // ── Load existing alerts ─────────────────────────────────────────────────
+    async function loadActiveAlerts() {
+        const db = VitalLinkAuth.db;
+        db.ref('/disaster_alerts').orderByChild('created_at').limitToLast(10).on('value', snap => {
+            const tbody = document.getElementById('alerts-log');
+            const data = snap.val();
+            if (!data) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-secondary py-3">لا توجد تنبيهات</td></tr>';
+                return;
+            }
+
+            const rows = Object.entries(data)
+                .sort((a, b) => (b[1].created_at || 0) - (a[1].created_at || 0))
+                .map(([id, a]) => {
+                    const time = new Date((a.created_at || 0) * 1000).toLocaleString('ar');
+                    const statusBadge = a.status === 'active'
+                        ? '<span class="badge bg-danger">نشط</span>'
+                        : '<span class="badge bg-secondary">ملغى</span>';
+                    return `<tr>
+                        <td class="small">${time}</td>
+                        <td>${a.label || a.type}</td>
+                        <td class="small text-secondary">${(a.lat||0).toFixed(3)}, ${(a.lng||0).toFixed(3)}</td>
+                        <td>${a.radius_km} كم</td>
+                        <td>${statusBadge}</td>
+                        <td>${a.status === 'active'
+                            ? `<button class="btn btn-sm btn-outline-danger" onclick="cancelSpecific('${id}')">إلغاء</button>`
+                            : ''}</td>
+                    </tr>`;
+                }).join('');
+
+            tbody.innerHTML = rows;
+        });
+    }
+
+    async function cancelSpecific(alertId) {
+        const db = VitalLinkAuth.db;
+        await db.ref(`/disaster_alerts/${alertId}/status`).set("cancelled");
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    function setStatus(text, color) {
+        const el = document.getElementById('status-badge');
+        el.textContent = text;
+        el.className = `badge bg-${color} fs-6`;
+    }
+
+    function addToLog(id, a) {
+        const time = new Date(a.created_at * 1000).toLocaleString('ar');
+        const tbody = document.getElementById('alerts-log');
+        if (tbody.querySelector('td[colspan]')) tbody.innerHTML = '';
+        tbody.insertAdjacentHTML('afterbegin', `<tr>
+            <td class="small">${time}</td>
+            <td>${a.label}</td>
+            <td class="small text-secondary">${a.lat.toFixed(3)}, ${a.lng.toFixed(3)}</td>
+            <td>${a.radius_km} كم</td>
+            <td><span class="badge bg-danger">نشط</span></td>
+            <td><button class="btn btn-sm btn-outline-danger" onclick="cancelSpecific('${id}')">إلغاء</button></td>
+        </tr>`);
+    }
+</script>
+}

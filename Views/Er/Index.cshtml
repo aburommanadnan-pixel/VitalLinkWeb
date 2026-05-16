@@ -1,0 +1,148 @@
+@{
+    ViewData["Title"] = "ER Staff Dashboard";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="text-info">
+        <i class="bi bi-exclamation-octagon-fill text-danger"></i>
+        Emergency Dashboard
+    </h1>
+    <div id="status" class="badge bg-secondary fs-6">Connecting...</div>
+</div>
+
+<p class="text-secondary mb-4">
+    New alerts appear automatically. Click <strong>Acknowledge</strong> to mark
+    that your team has been prepared. Acknowledged alerts move to History.
+</p>
+
+<div id="alert-container" class="d-flex flex-wrap gap-3"></div>
+
+<div id="empty-state" class="text-center py-5 text-secondary">
+    <i class="bi bi-shield-check display-1 text-success"></i>
+    <h4 class="mt-3">All clear</h4>
+    <p>No active alerts at the moment. The dashboard is listening...</p>
+</div>
+
+
+@section Scripts {
+<script>
+    VitalLinkAuth.requireAuth(["er_staff", "admin"]).then(() => {
+        setStatus("Connected — Monitoring for alerts...", "success");
+        // listenActiveAlerts subscribes to /active_alerts (the new "live" path).
+        VitalLinkSchema.listenActiveAlerts((id, data) => {
+            renderCard(id, data);
+            playAlarm();
+        });
+    });
+
+    function setStatus(text, color) {
+        const el = document.getElementById("status");
+        el.textContent = text;
+        el.className = "badge bg-" + color + " fs-6";
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // Each alert in the new schema looks like:
+    //   {
+    //     patient_id: "P-001",
+    //     patient_snapshot: { name, blood_type, allergies, conditions },
+    //     accident: { lat, lng, g_force, airbag },
+    //     hospital_id: "H-001",
+    //     hospital_snapshot: { name, eta_seconds },
+    //     status: "active",
+    //     created_at: 1730000000
+    //   }
+    // ────────────────────────────────────────────────────────────────
+    function renderCard(alertId, data) {
+        document.getElementById("empty-state").style.display = "none";
+
+        const ps = data.patient_snapshot || {};
+        const hs = data.hospital_snapshot || {};
+        const ac = data.accident || {};
+
+        const etaMin = Math.round((hs.eta_seconds || 0) / 60);
+        const allergies = (ps.allergies || []).join(", ") || "None";
+        const conditions = (ps.conditions || []).join(", ") || "None";
+        const gforce = (ac.g_force || 0).toFixed(1);
+        const airbag = ac.airbag ? "⚠ AIRBAG DEPLOYED" : "No airbag";
+        const lat = (ac.lat || 0).toFixed(4);
+        const lng = (ac.lng || 0).toFixed(4);
+
+        const card = document.createElement("div");
+        card.className = "alert-card pulse";
+        card.id = "card-" + alertId;
+        card.innerHTML = `
+            <div class="alert-tag">ACTIVE ALERT</div>
+            <div class="patient-name">👤 ${escapeHtml(ps.name || "Unknown")}</div>
+            <div class="blood-type">🩸 Blood Type: ${escapeHtml(ps.blood_type || "-")}</div>
+            <div class="info-row">⚠ Allergies: ${escapeHtml(allergies)}</div>
+            <div class="info-row">🏥 Conditions: ${escapeHtml(conditions)}</div>
+            <div class="info-row">📍 Location: ${lat}, ${lng}</div>
+            <div class="g-force">💥 G-Force: ${gforce}g | ${airbag}</div>
+            <div class="eta-display">🚑 ETA: ~${etaMin} min</div>
+            <div class="info-row">🏥 Directed to: ${escapeHtml(hs.name || "-")}</div>
+            <button class="btn btn-success w-100 mt-2" data-alert-id="${alertId}">
+                ✔ Acknowledge & Prepare Team
+            </button>
+        `;
+        // Wire up the click handler. We pass the FULL alert object so the
+        // schema helper has all the data it needs to write to history.
+        card.querySelector("button").addEventListener("click",
+            () => acknowledge(alertId, data, card));
+
+        document.getElementById("alert-container").prepend(card);
+    }
+
+    async function acknowledge(alertId, alertData, card) {
+        const button = card.querySelector("button");
+        button.disabled = true;
+        button.textContent = "Saving...";
+
+        try {
+            // ONE call. Atomically: move to history + delete from active + audit log.
+            await VitalLinkSchema.acknowledgeAlert(alertId, alertData);
+
+            // The card vanishes once the active_alerts subscription notices
+            // the deletion — but we also nuke it immediately for snappiness.
+            card.classList.remove("pulse");
+            card.classList.add("acked");
+            card.querySelector(".alert-tag").textContent = "ACKNOWLEDGED";
+            button.textContent = "✅ Acknowledged";
+            setTimeout(() => {
+                card.style.transition = "opacity 0.5s";
+                card.style.opacity = "0";
+                setTimeout(() => card.remove(), 500);
+            }, 1500);
+
+            // Show the empty state if no cards remain.
+            if (document.getElementById("alert-container").childElementCount === 0) {
+                document.getElementById("empty-state").style.display = "";
+            }
+        } catch (err) {
+            button.disabled = false;
+            button.textContent = "✔ Acknowledge & Prepare Team";
+            alert("Failed to acknowledge: " + err.message);
+        }
+    }
+
+    function playAlarm() {
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            [0, 0.3, 0.6].forEach(t => {
+                const o = ctx.createOscillator();
+                const g = ctx.createGain();
+                o.connect(g); g.connect(ctx.destination);
+                o.frequency.value = 880;
+                o.start(ctx.currentTime + t);
+                o.stop(ctx.currentTime + t + 0.25);
+            });
+        } catch (_) { /* sound is non-critical */ }
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({
+            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        }[c]));
+    }
+</script>
+}

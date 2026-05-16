@@ -1,0 +1,99 @@
+@*
+    _Layout.cshtml — master template wrapping every page.
+    Updated for role-based access:
+      - Removes hospital password from window.* (login replaces it)
+      - Adds nav links tagged with data-role-required so JS can hide them
+      - Adds a #user-info area on the right (filled in by auth.js)
+      - Hides the navbar entirely on the login page (when ViewData["HideNav"] is true)
+*@
+@inject Microsoft.Extensions.Configuration.IConfiguration Configuration
+
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - VitalLink</title>
+
+    <link rel="stylesheet"
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+    <link rel="stylesheet"
+          href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.min.css">
+    <link rel="stylesheet" href="~/css/site.css" />
+</head>
+<body>
+
+    @* Hide the whole navbar on pages that explicitly set ViewData["HideNav"] = true (login). *@
+    @if (ViewData["HideNav"] as bool? != true)
+    {
+        <nav class="navbar navbar-expand-lg border-bottom border-secondary">
+            <div class="container-fluid">
+                <a class="navbar-brand text-info fw-bold" asp-controller="Home" asp-action="Index">
+                    <i class="bi bi-heart-pulse-fill"></i> VitalLink
+                </a>
+
+                @* Each link is tagged with data-role-required. auth.js hides links
+                   the current user's role doesn't allow. *@
+                <div class="navbar-nav me-auto">
+                    <a class="nav-link" asp-controller="Er" asp-action="Index"
+                       data-role-required="er_staff,admin">
+                        <i class="bi bi-hospital"></i> ER Staff
+                    </a>
+                    <a class="nav-link" asp-controller="Management" asp-action="Index"
+                       data-role-required="management,admin">
+                        <i class="bi bi-graph-up"></i> Management
+                    </a>
+                    <a class="nav-link" asp-controller="Disaster" asp-action="Index"
+                       data-role-required="management,admin">
+                        <i class="bi bi-exclamation-triangle-fill text-danger"></i> Disaster Alert
+                    </a>
+                    <a class="nav-link" asp-controller="History" asp-action="Index"
+                       data-role-required="any">
+                        <i class="bi bi-clock-history"></i> History
+                    </a>
+                    <a class="nav-link" asp-controller="Hospitals" asp-action="Index"
+                       data-role-required="management,admin">
+                        <i class="bi bi-building-gear"></i> Hospitals
+                    </a>
+                    <a class="nav-link" asp-controller="Admin" asp-action="Migrate"
+                       data-role-required="admin">
+                        <i class="bi bi-database-gear"></i> Migration
+                    </a>
+                </div>
+
+                @* User info / logout button — auth.js fills this in once signed in. *@
+                <div id="user-info" class="text-light small">
+                    <span class="text-secondary">Loading...</span>
+                </div>
+            </div>
+        </nav>
+    }
+
+    <main class="container-fluid py-4">
+        @RenderBody()
+    </main>
+
+    @* Firebase config from appsettings.json → JS global so the SDK can pick it up. *@
+    <script>
+        window.firebaseConfig = {
+            apiKey:            "@Configuration["Firebase:ApiKey"]",
+            authDomain:        "@Configuration["Firebase:AuthDomain"]",
+            databaseURL:       "@Configuration["Firebase:DatabaseURL"]",
+            projectId:         "@Configuration["Firebase:ProjectId"]",
+            storageBucket:     "@Configuration["Firebase:StorageBucket"]",
+            messagingSenderId: "@Configuration["Firebase:MessagingSenderId"]",
+            appId:             "@Configuration["Firebase:AppId"]"
+        };
+    </script>
+
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="~/js/auth.js"></script>
+    <script src="~/js/schema.js"></script>
+
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

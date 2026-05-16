@@ -1,0 +1,88 @@
+@*
+    Home/Index.cshtml — landing page after login.
+    Each tile is tagged with data-role-required so auth.js hides ones the
+    current user can't access. An ER-only user sees a single ER tile, etc.
+*@
+@{
+    ViewData["Title"] = "Welcome";
+}
+
+<div class="text-center my-4">
+    <h1 class="display-5 text-info">VitalLink Operations Center</h1>
+    <p class="lead text-secondary">Choose a dashboard</p>
+</div>
+
+<div class="row g-4 justify-content-center mt-4">
+
+    @* ER Staff tile *@
+    <div class="col-md-4" data-role-required="er_staff,admin">
+        <a asp-controller="Er" asp-action="Index" class="text-decoration-none">
+            <div class="card h-100 bg-dark border-danger border-2 dashboard-tile">
+                <div class="card-body p-4 text-center">
+                    <i class="bi bi-hospital display-3 text-danger"></i>
+                    <h3 class="card-title mt-2 text-light">ER Staff</h3>
+                    <p class="card-text text-secondary small">
+                        Live incoming alerts with patient profile, ETA,
+                        and one-click acknowledgement.
+                    </p>
+                </div>
+            </div>
+        </a>
+    </div>
+
+    @* Management tile *@
+    <div class="col-md-4" data-role-required="management,admin">
+        <a asp-controller="Management" asp-action="Index" class="text-decoration-none">
+            <div class="card h-100 bg-dark border-info border-2 dashboard-tile">
+                <div class="card-body p-4 text-center">
+                    <i class="bi bi-graph-up display-3 text-info"></i>
+                    <h3 class="card-title mt-2 text-light">Emergency Management</h3>
+                    <p class="card-text text-secondary small">
+                        KPIs, hospitals on network, recent alerts, hourly trend.
+                    </p>
+                </div>
+            </div>
+        </a>
+    </div>
+
+    @* History tile (everyone) *@
+    <div class="col-md-4" data-role-required="any">
+        <a asp-controller="History" asp-action="Index" class="text-decoration-none">
+            <div class="card h-100 bg-dark border-warning border-2 dashboard-tile">
+                <div class="card-body p-4 text-center">
+                    <i class="bi bi-clock-history display-3 text-warning"></i>
+                    <h3 class="card-title mt-2 text-light">Alert History</h3>
+                    <p class="card-text text-secondary small">
+                        Search past alerts. Filter by date, status, patient.
+                        Export to CSV.
+                    </p>
+                </div>
+            </div>
+        </a>
+    </div>
+
+    @* Hospital management tile *@
+    <div class="col-md-4" data-role-required="management,admin">
+        <a asp-controller="Hospitals" asp-action="Index" class="text-decoration-none">
+            <div class="card h-100 bg-dark border-success border-2 dashboard-tile">
+                <div class="card-body p-4 text-center">
+                    <i class="bi bi-building-gear display-3 text-success"></i>
+                    <h3 class="card-title mt-2 text-light">Manage Hospitals</h3>
+                    <p class="card-text text-secondary small">
+                        Add, edit, or remove hospitals on the routing network.
+                    </p>
+                </div>
+            </div>
+        </a>
+    </div>
+
+</div>
+
+
+@section Scripts {
+<script>
+    // Just require any logged-in user — the data-role-required tags on each
+    // tile do the per-role filtering automatically.
+    VitalLinkAuth.requireAuth();
+</script>
+}

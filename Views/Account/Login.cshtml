@@ -1,0 +1,116 @@
+@{
+    ViewData["Title"] = "Sign In";
+    ViewData["HideNav"] = true;   // suppress the navbar on this page
+}
+
+<div class="d-flex align-items-center justify-content-center"
+     style="min-height: calc(100vh - 80px);">
+    <div class="card bg-dark border-info" style="width: 420px;">
+        <div class="card-body p-4">
+            <div class="text-center mb-4">
+                <i class="bi bi-heart-pulse-fill display-3 text-info"></i>
+                <h2 class="mt-2">VitalLink</h2>
+                <p class="text-secondary mb-0">Operations Center Login</p>
+            </div>
+
+            <div id="error-message" class="alert alert-danger d-none"></div>
+
+            @* No <form> tag with action= because the submit happens via JS — we don't
+               want the browser to actually POST anywhere. *@
+            <div class="mb-3">
+                <label for="email" class="form-label">Email</label>
+                <input type="email" id="email" class="form-control"
+                       placeholder="staff@vitallink.com" autocomplete="email" autofocus>
+            </div>
+
+            <div class="mb-3">
+                <label for="password" class="form-label">Password</label>
+                <input type="password" id="password" class="form-control"
+                       placeholder="Enter password" autocomplete="current-password">
+            </div>
+
+            <button id="signin-btn" class="btn btn-info w-100 mt-2">
+                <i class="bi bi-box-arrow-in-right"></i> Sign In
+            </button>
+
+            <div class="text-center mt-4">
+                <small class="text-secondary">
+                    Forgot your password? Contact your system administrator.
+                </small>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+@section Scripts {
+<script>
+    // Helper: show or hide the red error banner.
+    function showError(msg) {
+        const el = document.getElementById("error-message");
+        el.textContent = msg;
+        el.classList.remove("d-none");
+    }
+    function hideError() {
+        document.getElementById("error-message").classList.add("d-none");
+    }
+
+    // Map Firebase error codes to friendly messages.
+    function friendlyError(code) {
+        const map = {
+            "auth/invalid-email":            "That doesn't look like a valid email address.",
+            "auth/user-not-found":           "No account exists with that email.",
+            "auth/wrong-password":           "Wrong password. Try again.",
+            "auth/invalid-login-credentials":"Email or password is incorrect.",
+            "auth/invalid-credential":       "Email or password is incorrect.",
+            "auth/too-many-requests":        "Too many failed attempts. Try again in a few minutes.",
+            "auth/network-request-failed":   "Network error. Check your internet connection."
+        };
+        return map[code] || ("Sign in failed: " + code);
+    }
+
+    // Click handler for the Sign In button.
+    document.getElementById("signin-btn").addEventListener("click", doSignIn);
+    // Pressing Enter in either field also submits.
+    ["email", "password"].forEach(id => {
+        document.getElementById(id).addEventListener("keydown", e => {
+            if (e.key === "Enter") doSignIn();
+        });
+    });
+
+    async function doSignIn() {
+        hideError();
+        const email = document.getElementById("email").value.trim();
+        const password = document.getElementById("password").value;
+        if (!email || !password) {
+            showError("Please enter both email and password.");
+            return;
+        }
+
+        const btn = document.getElementById("signin-btn");
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Signing in...';
+
+        try {
+            const { role } = await VitalLinkAuth.signIn(email, password);
+
+            // Redirect based on role.
+            const destination = {
+                "admin":      "/",
+                "management": "/Management",
+                "er_staff":   "/Er"
+            }[role] || "/";
+            window.location.href = destination;
+        } catch (err) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-box-arrow-in-right"></i> Sign In';
+            showError(friendlyError(err.code));
+        }
+    }
+
+    // If already signed in, skip straight past the form.
+    VitalLinkAuth.auth.onAuthStateChanged(user => {
+        if (user) window.location.href = "/";
+    });
+</script>
+}

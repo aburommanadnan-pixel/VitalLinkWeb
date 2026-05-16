@@ -1,0 +1,164 @@
+@{
+    ViewData["Title"] = "Schema Migration";
+}
+
+<h1 class="text-info">
+    <i class="bi bi-database-gear"></i> Schema Migration Tool
+</h1>
+
+<div class="alert alert-warning">
+    <h5><i class="bi bi-exclamation-triangle-fill"></i> Read this first</h5>
+    <p class="mb-0">
+        This tool converts data from the OLD schema (everything in
+        <code class="text-light">/alerts</code>) to the NEW schema
+        (<code class="text-light">/active_alerts</code> + <code class="text-light">/alert_history/{YYYY}/{MM}</code>).
+        It does NOT delete the legacy data — you can review the new tree first and remove
+        <code class="text-light">/alerts</code> manually from the Firebase Console once you're happy.
+    </p>
+</div>
+
+<div class="card bg-dark mb-3">
+    <div class="card-body">
+        <h5>What this tool does</h5>
+        <ol class="text-secondary">
+            <li>Reads every record from <code class="text-light">/alerts</code></li>
+            <li>For each one:
+                <ul>
+                    <li>Reshapes <code>patient</code> → <code>patient_snapshot</code></li>
+                    <li>Reshapes <code>hospital</code> → <code>hospital_snapshot</code></li>
+                    <li>Renames <code>timestamp</code> → <code>created_at</code></li>
+                    <li>Writes to <code>/active_alerts</code> if status is <code>active</code></li>
+                    <li>Otherwise writes to <code>/alert_history/{YYYY}/{MM}</code></li>
+                </ul>
+            </li>
+            <li>Logs a "migration" entry to <code class="text-light">/audit_log</code> so you have a record</li>
+        </ol>
+
+        <button id="run-btn" class="btn btn-info">
+            <i class="bi bi-play-fill"></i> Run migration
+        </button>
+        <button id="dry-btn" class="btn btn-outline-secondary">
+            <i class="bi bi-eye"></i> Preview only (no writes)
+        </button>
+    </div>
+</div>
+
+<div id="output" class="card bg-dark d-none">
+    <div class="card-header bg-dark border-bottom border-secondary">
+        <h5 class="mb-0">Migration log</h5>
+    </div>
+    <div class="card-body" style="max-height: 400px; overflow-y: auto;">
+        <pre id="log" class="text-light small mb-0" style="background: transparent;"></pre>
+    </div>
+</div>
+
+
+@section Scripts {
+<script>
+    VitalLinkAuth.requireAuth(["admin"]).then(() => {
+        document.getElementById("run-btn").addEventListener("click", () => migrate(false));
+        document.getElementById("dry-btn").addEventListener("click", () => migrate(true));
+    });
+
+    let logEl;
+    function log(msg, color) {
+        if (!logEl) logEl = document.getElementById("log");
+        const colorStyle = color ? `color: ${color};` : "";
+        logEl.innerHTML += `<div style="${colorStyle}">${escapeHtml(msg)}</div>`;
+        logEl.parentElement.scrollTop = logEl.parentElement.scrollHeight;
+    }
+
+    async function migrate(dryRun) {
+        document.getElementById("output").classList.remove("d-none");
+        document.getElementById("log").innerHTML = "";
+
+        log(dryRun ? "═══ PREVIEW MODE — no writes ═══" : "═══ MIGRATION STARTING ═══", "#4fc3f7");
+
+        // Read all legacy records.
+        const snap = await VitalLinkAuth.db.ref(VitalLinkSchema.Paths.legacyAlerts())
+            .once("value");
+        const legacy = snap.val() || {};
+        const ids = Object.keys(legacy);
+
+        if (ids.length === 0) {
+            log("No legacy data found at /alerts. Nothing to migrate.", "#ffd93d");
+            return;
+        }
+        log(`Found ${ids.length} legacy record(s).`);
+
+        let activeCount = 0, historyCount = 0;
+        const updates = {};
+
+        for (const id of ids) {
+            const old = legacy[id];
+
+            // Reshape into the new format.
+            const created = old.timestamp || Math.floor(Date.now() / 1000);
+            const newRecord = {
+                patient_id: "P-LEGACY-" + id.slice(0, 8),
+                patient_snapshot: old.patient || {},
+                accident: old.accident || {},
+                hospital_id: "H-LEGACY",
+                hospital_snapshot: old.hospital || {},
+                status: old.status || "acknowledged",
+                created_at: created
+            };
+            if (old.acknowledged && old.status !== "active") {
+                newRecord.acknowledged_at = created;  // we don't know the real time; use created
+            }
+
+            if (newRecord.status === "active") {
+                updates[VitalLinkSchema.Paths.activeAlert(id)] = newRecord;
+                activeCount++;
+                log(`  → /active_alerts/${id} (${newRecord.patient_snapshot.name || "—"})`);
+            } else {
+                const d = new Date(created * 1000);
+                const path = VitalLinkSchema.Paths.historyAlert(
+                    d.getFullYear(), d.getMonth() + 1, id);
+                updates[path] = newRecord;
+                historyCount++;
+                log(`  → ${path} (${newRecord.patient_snapshot.name || "—"})`);
+            }
+        }
+
+        log("");
+        log(`Plan: ${activeCount} → active_alerts, ${historyCount} → alert_history`, "#27ae60");
+
+        if (dryRun) {
+            log("Preview complete. No data was changed.", "#4fc3f7");
+            return;
+        }
+
+        log("Applying updates...");
+        try {
+            await VitalLinkAuth.db.ref().update(updates);
+
+            const auditPath = VitalLinkSchema.Paths.auditLog() + "/" +
+                VitalLinkAuth.db.ref().push().key;
+            await VitalLinkAuth.db.ref(auditPath).set({
+                user_uid: VitalLinkAuth.getCurrentUser().uid,
+                user_email: VitalLinkAuth.getCurrentUser().email,
+                action: "schema_migration",
+                target: "legacy_alerts → active_alerts + alert_history",
+                details: { active: activeCount, history: historyCount },
+                created_at: Math.floor(Date.now() / 1000)
+            });
+
+            log("✅ Migration complete!", "#27ae60");
+            log("");
+            log("Next steps:", "#4fc3f7");
+            log("  1. Verify the data in Firebase Console (Realtime Database tab)");
+            log("  2. If happy, manually delete the /alerts node from the console");
+            log("  3. Update your Flask backend to write to /active_alerts instead of /alerts");
+        } catch (err) {
+            log("❌ Migration failed: " + err.message, "#e74c3c");
+        }
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({
+            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        }[c]));
+    }
+</script>
+}

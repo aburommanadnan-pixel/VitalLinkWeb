@@ -1,0 +1,116 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   site.css — custom styles on top of Bootstrap 5 dark theme.
+   Bootstrap gives us 95% of the look; this file adds the "medical dashboard"
+   personality (dark navy background, pulsing alert cards, etc.).
+   ════════════════════════════════════════════════════════════════════════════ */
+
+body {
+    background-color: #0d1b2a;
+    color: #e6edf3;
+    min-height: 100vh;
+}
+
+.navbar {
+    background-color: #1a2a3a;
+}
+
+/* Card hover effect on the homepage tiles. */
+.dashboard-tile {
+    transition: transform 0.2s, box-shadow 0.2s;
+    cursor: pointer;
+}
+.dashboard-tile:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(79, 195, 247, 0.2);
+}
+
+/* Bootstrap's bg-dark is too dark; lighten our cards a touch. */
+.card.bg-dark {
+    background-color: #1a2a3a !important;
+}
+
+/* ── Alert cards on the ER dashboard ─────────────────────────────────────── */
+.alert-card {
+    background-color: #1a2a3a;
+    border: 2px solid #e74c3c;
+    border-radius: 10px;
+    padding: 20px;
+    width: 380px;
+    color: #cccccc;
+}
+
+.alert-card.acked {
+    border-color: #27ae60;
+    opacity: 0.85;
+}
+
+.alert-tag {
+    font-size: 11px;
+    color: #e74c3c;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.alert-card.acked .alert-tag {
+    color: #27ae60;
+}
+
+.patient-name {
+    font-size: 22px;
+    font-weight: 700;
+    color: #ff6b6b;
+    margin-bottom: 4px;
+}
+
+.blood-type {
+    font-size: 18px;
+    color: #ffd93d;
+    margin-bottom: 6px;
+}
+
+.info-row {
+    font-size: 14px;
+    color: #cccccc;
+    margin-bottom: 4px;
+}
+
+.g-force {
+    font-size: 14px;
+    color: #ff9f43;
+    margin: 8px 0;
+}
+
+.eta-display {
+    font-size: 28px;
+    font-weight: 700;
+    color: #4fc3f7;
+    margin: 12px 0;
+}
+
+/* Pulsing red glow animation on active alert cards. */
+.pulse {
+    animation: pulse 1s infinite;
+}
+@keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.6); }
+    50%      { box-shadow: 0 0 0 10px rgba(231, 76, 60, 0); }
+}
+
+/* Stop the table headers from feeling out of place on the dark cards. */
+.table-dark {
+    --bs-table-bg: transparent;
+}
+.table-dark thead th {
+    background-color: #243447;
+    border-bottom: 2px solid #4fc3f7;
+    color: #4fc3f7;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Slight border on table rows, lighter than Bootstrap default. */
+.table-dark tbody tr {
+    border-color: #243447;
+}
